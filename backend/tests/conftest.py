@@ -151,6 +151,9 @@ class FakeDB:
         self.companies = FakeCollection()
         self.contacts = FakeCollection()
         self.agent_logs = FakeCollection()
+        self.email_activities = FakeCollection()
+        self.evidence = FakeCollection()
+        self.domain_profiles = FakeCollection()
 
     async def command(self, command):
         return {"ok": 1}
@@ -159,6 +162,9 @@ class FakeDB:
 @pytest.fixture
 def fake_db():
     database = FakeDB()
+    from app.domain.domain_profile import DEFAULT_DOMAIN_PROFILES
+    for profile in DEFAULT_DOMAIN_PROFILES:
+        database.domain_profiles.docs[profile.id] = dict(profile.model_dump(), _id=profile.id)
     init_document_store(database)
     return database
 
@@ -172,7 +178,7 @@ def fake_redis():
 
 @pytest.fixture
 def client(fake_db, fake_redis):
-    init_vector_store(None, None)
+    init_vector_store(None, ":memory:")
     app.dependency_overrides[get_current_user] = lambda: UserContext(
         user_id="user_test",
         email="test@example.com",

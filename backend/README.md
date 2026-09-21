@@ -11,7 +11,7 @@ Implemented backend components:
 - FastAPI application with async REST APIs, WebSocket route, CORS, lifespan startup/shutdown, and `/health`.
 - Clerk JWT authentication with JWKS caching.
 - LangGraph workflow state and graph definition.
-- Celery worker for workflow execution.
+- In-process async workflow execution via FastAPI background tasks.
 - MongoDB document store for workflows, companies, contacts, and logs.
 - Redis cache, locks, pub/sub, event buffers, and Celery broker/backend.
 - Pinecone vector memory integration with local fallback when Pinecone is unavailable.
@@ -88,18 +88,17 @@ backend/
 │   │   ├── common.py
 │   │   ├── crunchbase_service.py
 │   │   ├── hunter_service.py
-│   │   └── serper_service.py
+│   │   ├── serper_service.py
+│   │   └── workflow_executor.py
 │   ├── tools/
 │   │   ├── email_finder_tool.py
 │   │   ├── linkedin_tool.py
 │   │   ├── phone_finder_tool.py
 │   │   └── web_search_tool.py
-│   └── workers/
-│       ├── celery_app.py
-│       └── workflow_worker.py
+│   └── domain/
+│       └── domain_profile.py
 ├── scripts/
-│   ├── run_api.sh
-│   └── run_worker.sh
+│   └── run_api.sh
 ├── tests/
 ├── Dockerfile
 ├── requirements.txt
@@ -307,21 +306,47 @@ When `PINECONE_API_KEY` is set and the Pinecone package is installed, companies 
 
 When Pinecone is missing or not configured, the backend uses an in-memory fallback vector store. This is useful for local startup and tests, but it is not persistent.
 
-### OpenAI And LLM Fallback
+### LLM Providers & Local-First Ollama Default
 
-When `OPENAI_API_KEY` is set and `langchain-openai` is installed:
+AgentSphere AI defaults to **local Ollama** (`qwen2.5:7b`) for all agent reasoning:
+- **Offline Capable & Zero Cost:** Eliminates token API fees for development and high-throughput discovery workflows.
+- **Privacy & Compliance:** Eliminates cloud data egress for sensitive prospect lists and target company searches.
+- **Structured JSON Support:** Highly reliable JSON instruction following with models like `qwen2.5:7b` or `llama3.1:8b`.
 
-- Planner Agent uses GPT-4o.
-- Summary Agent uses GPT-4o.
-- Vector store uses OpenAI embeddings.
+#### Setup Local Ollama
+```bash
+# Install Ollama (macOS/Linux/Windows)
+brew install ollama  # or download from https://ollama.com
 
-When OpenAI or `langchain-openai` is unavailable:
+# Pull the recommended default model
+ollama pull qwen2.5:7b
 
-- Planner Agent uses a deterministic fallback plan.
-- Summary Agent uses a deterministic fallback report.
-- Vector embeddings use local hashed fallback vectors.
+# Ensure Ollama daemon is running
+ollama serve
+```
 
-This prevents missing optional AI/vector packages from crashing the API import.
+#### Provider Configuration & Cloud Opt-In
+You can configure the active LLM via `LLM_PROVIDER`:
+- `LLM_PROVIDER=ollama` (default): Uses local Ollama at `OLLAMA_BASE_URL` (default `http://localhost:11434`).
+- `LLM_PROVIDER=gemini`: Opt-in cloud provider with `GEMINI_API_KEY` (model: `gemini-1.5-pro` or `gemini-1.5-flash`).
+- `LLM_PROVIDER=openai`: Opt-in cloud provider with `OPENAI_API_KEY` (model: `gpt-4o`).
+
+When Ollama is unreachable or model is not pulled, agents gracefully fall back to **deterministic execution plans and reports** without crashing the workflow or API.
+
+### Multi-Provider Sourcing & Data Quality
+
+To eliminate repetitive results and single-provider data gaps, AgentSphere AI employs parallel multi-provider pipelines:
+1. **Company Discovery:**
+   - Queries **Crunchbase** (funding rounds, founded year, canonical headcount, headquarters) and **Apollo** (domain, industry, tech stack) simultaneously.
+   - Merges fields with conflict detection and records explicit evidence trails (`evidence` array with `source="crunchbase+apollo"` when corroborated).
+   - Enforces strict in-run domain and company name deduplication plus FAISS exact domain lookup.
+2. **Decision Maker Agent:**
+   - Primary: **Apollo People Search** for verified title matches.
+   - Fallback: **Serper LinkedIn search** (`site:linkedin.com/in`) for executives matching ICP roles.
+3. **Contact Enrichment Agent:**
+   - Primary for email: **Hunter.io** pattern matching and email deliverability confidence scoring.
+   - Primary for phone & fallback email: **Apollo.io**.
+   - Records provider provenance: `email_source` (`"hunter"`, `"apollo"`, or `"hunter+apollo"`), `phone_source` (`"apollo"`).
 
 ## Environment Variables
 
@@ -331,24 +356,30 @@ Create `backend/.env` from `.env.example` and update values for your environment
 APP_ENV=development
 SECRET_KEY=change_me_in_production
 LOG_LEVEL=INFO
+MOCK_MODE=True
 
-OPENAI_API_KEY=sk-...
+# LLM Configuration (Defaults to local Ollama)
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5:7b
+
+# Optional Cloud LLMs (Opt-in via LLM_PROVIDER)
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-1.5-flash
+OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+
+# Data Providers
+CRUNCHBASE_API_KEY=
+APOLLO_API_KEY=
+HUNTER_API_KEY=
+SERPER_API_KEY=
 
 MONGODB_URI=mongodb://localhost:27017
 MONGODB_DB_NAME=agentsphere
 
 REDIS_URL=redis://localhost:6379/0
-
-PINECONE_API_KEY=...
-PINECONE_INDEX_NAME=agentsphere-memory
-PINECONE_ENVIRONMENT=us-east-1-aws
-
-CLERK_SECRET_KEY=sk_test_...
-CLERK_JWKS_URL=https://your-clerk-domain.clerk.accounts.dev/.well-known/jwks.json
-
-SERPER_API_KEY=...
 HUNTER_API_KEY=...
 APOLLO_API_KEY=...
 CRUNCHBASE_API_KEY=...
@@ -403,38 +434,21 @@ Expected first line:
 Using Python: /Users/pkarthikreddy/Documents/AgentForge/backend/venv/bin/python
 ```
 
-### Recommended Worker Command
+### Starting the Server
 
-Run this in a second terminal:
+The application runs workflows asynchronously in-process — no separate worker process is needed!
 
 ```bash
 cd /Users/pkarthikreddy/Documents/AgentForge/backend
-./scripts/run_worker.sh
+./scripts/run_api.sh
 ```
 
-### Direct API Command
-
-This is also safe because it explicitly uses the venv interpreter:
+Or run directly with your virtual environment:
 
 ```bash
 cd /Users/pkarthikreddy/Documents/AgentForge/backend
 ./venv/bin/python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
-
-### Direct Worker Command
-
-```bash
-cd /Users/pkarthikreddy/Documents/AgentForge/backend
-./venv/bin/python -m celery -A app.workers.celery_app worker --loglevel=info
-```
-
-Avoid this unless the venv is definitely active:
-
-```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-If it uses global Homebrew Python, you may see missing dependency errors for packages already installed in `backend/venv`.
 
 ## Health Check
 
@@ -803,10 +817,8 @@ MongoDB check depends on your local or cloud setup. Verify `MONGODB_URI`.
 
 Check:
 
-- Celery worker is running.
-- FastAPI and Celery use the same `REDIS_URL`.
 - MongoDB is reachable.
-- Worker terminal logs do not show an exception.
+- Server logs do not show an exception.
 - `langgraph` is installed in the backend venv.
 
 ### WebSocket receives no events
@@ -815,7 +827,6 @@ Check:
 
 - URL includes `?token=<clerk_jwt_token>`.
 - Redis is running.
-- Worker is running.
 - Workflow ID is correct.
 
 ### Empty companies or contacts
@@ -843,8 +854,6 @@ Run:
 docker run --env-file .env -p 8000:8000 agentsphere-backend
 ```
 
-Run Celery separately in production or through your process manager/container platform.
-
 ## Production Notes
 
 Before production:
@@ -854,8 +863,7 @@ Before production:
 - Use production Clerk JWKS URL.
 - Set all needed external API keys.
 - Restrict `ALLOWED_ORIGINS`.
-- Run API and Celery worker as separate processes.
-- Monitor API logs, worker logs, Redis, MongoDB, and external API failures.
+- Monitor API logs, Redis, MongoDB, and external API failures.
 - Use persistent Pinecone for cross-run semantic memory.
 
 When `APP_ENV=production`, FastAPI docs are disabled.

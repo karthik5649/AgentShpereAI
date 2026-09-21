@@ -1,6 +1,5 @@
-
 import { useQuery } from '@tanstack/react-query';
-import { workflowsApi } from '../lib/api';
+import { workflowsApi, analyticsApi } from '../lib/api';
 import { formatCost, formatDate } from '../lib/utils';
 import { DollarSign, BarChart3, LineChart as ChartIcon, PieChart as PieIcon, Download, RefreshCw } from 'lucide-react';
 import {
@@ -21,40 +20,70 @@ import {
 import { toast } from 'sonner';
 
 export function CostPage() {
-  // Fetch workflows to calculate dynamic cost metrics
-  const { data, isLoading, refetch, isFetching } = useQuery({
+  const { data, isLoading: isWfLoading, refetch: refetchWf, isFetching: isWfFetching } = useQuery({
     queryKey: ['workflowsCost'],
     queryFn: () => workflowsApi.list(1),
   });
 
+  const { data: analyticsData, isLoading: isAnalyticsLoading, refetch: refetchAnalytics, isFetching: isAnalyticsFetching } = useQuery({
+    queryKey: ['analyticsData'],
+    queryFn: () => analyticsApi.get(),
+  });
+
+  const isLoading = isWfLoading || isAnalyticsLoading;
+  const isFetching = isWfFetching || isAnalyticsFetching;
+  const refetch = () => {
+    refetchWf();
+    refetchAnalytics();
+  };
+
   const workflows = data?.workflows || [];
 
-  // Generate aggregate metrics
-  const totalCost = workflows.reduce((sum, w) => sum + (w.total_cost_usd || 0), 0) || 12.4562;
-  const totalLeads = workflows.reduce((sum, w) => sum + (w.results_count || 0), 0) || 284;
-  const costPerLead = totalLeads ? totalCost / totalLeads : 0.0438;
+  // Generate aggregate metrics from dynamic backend analytics
+  const totalCost = analyticsData?.total_cost_usd ?? workflows.reduce((sum, w) => sum + (w.total_cost_usd || 0), 0);
+  const totalLeads = analyticsData?.total_leads ?? workflows.reduce((sum, w) => sum + (w.results_count || 0), 0);
+  const costPerLead = totalLeads ? totalCost / totalLeads : (analyticsData?.cost_per_lead ?? 0.0);
 
-  // Premium mock breakdown analytics for charts
-  const agentCostData = [
-    { name: 'Planner Agent', cost: 0.125, color: '#3B82F6' },
-    { name: 'Search Agent', cost: 0.084, color: '#06B6D4' },
-    { name: 'Company Discovery', cost: 0.062, color: '#14B8A6' },
-    { name: 'Validation Agent', cost: 0.024, color: '#10B981' },
-    { name: 'Decision Maker', cost: 0.048, color: '#8B5CF6' },
-    { name: 'Contact Enrichment', cost: 0.144, color: '#A855F7' },
-    { name: 'Summary Agent', cost: 0.180, color: '#F59E0B' },
-    { name: 'Human Approval', cost: 0.000, color: '#EC4899' },
-  ];
+  const agentColors: Record<string, string> = {
+    'planner_agent': '#3B82F6',
+    'search_agent': '#06B6D4',
+    'company_discovery_agent': '#14B8A6',
+    'validation_agent': '#10B981',
+    'decision_maker_agent': '#8B5CF6',
+    'contact_enrichment_agent': '#A855F7',
+    'summary_agent': '#F59E0B',
+    'human_approval_agent': '#EC4899',
+  };
 
-  const dailySpendData = [
-    { day: 'Jun 22', spend: 0.12 },
-    { day: 'Jun 23', spend: 0.28 },
-    { day: 'Jun 24', spend: 0.42 },
-    { day: 'Jun 25', spend: 0.15 },
-    { day: 'Jun 26', spend: 0.89 },
-    { day: 'Jun 27', spend: 1.12 },
-    { day: 'Jun 28', spend: 0.65 },
-  ];
+  const backendBreakdown = analyticsData?.agent_breakdown || [];
+  const agentCostData = backendBreakdown.length > 0
+    ? backendBreakdown.map((b: any) => ({
+        name: b.name.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+        cost: b.cost,
+        color: agentColors[b.name] || '#3B82F6',
+      }))
+    : [
+        { name: 'Planner Agent', cost: 0.125, color: '#3B82F6' },
+        { name: 'Search Agent', cost: 0.084, color: '#06B6D4' },
+        { name: 'Company Discovery', cost: 0.062, color: '#14B8A6' },
+        { name: 'Validation Agent', cost: 0.024, color: '#10B981' },
+        { name: 'Decision Maker', cost: 0.048, color: '#8B5CF6' },
+        { name: 'Contact Enrichment', cost: 0.144, color: '#A855F7' },
+        { name: 'Summary Agent', cost: 0.180, color: '#F59E0B' },
+        { name: 'Human Approval', cost: 0.000, color: '#EC4899' },
+      ];
+
+  const dailySpendData = (analyticsData?.daily_spend && analyticsData.daily_spend.length > 0)
+    ? analyticsData.daily_spend
+    : [
+        { day: 'Day 1', spend: 0.12 },
+        { day: 'Day 2', spend: 0.28 },
+        { day: 'Day 3', spend: 0.42 },
+        { day: 'Day 4', spend: 0.15 },
+        { day: 'Day 5', spend: 0.89 },
+        { day: 'Day 6', spend: 1.12 },
+        { day: 'Day 7', spend: 0.65 },
+      ];
 
   const pieColors = ['#3B82F6', '#06B6D4', '#14B8A6', '#10B981', '#8B5CF6', '#A855F7', '#F59E0B', '#EF4444'];
 
@@ -131,18 +160,24 @@ export function CostPage() {
 
         {/* Metric 3 */}
         <div className="glass-card p-4">
-          <span className="text-[10px] text-text-muted font-bold uppercase tracking-wider">Most Expensive Agent</span>
-          <div className="text-lg font-extrabold text-white mt-1 truncate">Summary Agent</div>
-          <span className="text-[9px] text-danger font-semibold mt-1 block">Avg. cost per execution: $0.180</span>
+          <span className="text-[10px] text-text-muted font-bold uppercase tracking-wider">Most Active Agent</span>
+          <div className="text-lg font-extrabold text-white mt-1 truncate">
+            {agentCostData[0]?.name || 'Summary Agent'}
+          </div>
+          <span className="text-[9px] text-primary font-semibold mt-1 block">
+            {agentCostData[0] ? `Cost: ${formatCost(agentCostData[0].cost)}` : 'Avg. cost: $0.180'}
+          </span>
         </div>
 
         {/* Metric 4 */}
         <div className="glass-card p-4">
-          <span className="text-[10px] text-text-muted font-bold uppercase tracking-wider">Most Efficient Workflow</span>
+          <span className="text-[10px] text-text-muted font-bold uppercase tracking-wider">Most Recent Pipeline</span>
           <div className="text-lg font-extrabold text-white mt-1 truncate">
             {workflows[0]?.name || 'Pre-Seed B2B'}
           </div>
-          <span className="text-[9px] text-success font-semibold mt-1 block">Average lead CPL: $0.024</span>
+          <span className="text-[9px] text-success font-semibold mt-1 block">
+            {workflows[0] ? `Status: ${workflows[0].status}` : 'Average lead CPL: $0.024'}
+          </span>
         </div>
       </div>
 
@@ -165,7 +200,7 @@ export function CostPage() {
                 <YAxis dataKey="name" type="category" stroke="#9CA3AF" fontSize={10} width={100} />
                 <Tooltip formatter={(value: any) => [`$${value.toFixed(4)}`, 'Average Cost']} />
                 <Bar dataKey="cost" fill="#3B82F6">
-                  {agentCostData.map((e, index) => (
+                  {agentCostData.map((e: any, index: number) => (
                     <Cell key={`cell-${index}`} fill={e.color} />
                   ))}
                 </Bar>
@@ -210,7 +245,7 @@ export function CostPage() {
                 paddingAngle={2}
                 dataKey="cost"
               >
-                {agentCostData.map((_, index) => (
+                {agentCostData.map((_: any, index: number) => (
                   <Cell key={`cell-${index}`} fill={pieColors[index % pieColors.length]} />
                 ))}
               </Pie>

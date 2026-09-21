@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import type { Company } from '../../types/company';
-import { CheckCircle2, AlertTriangle, AlertCircle, ExternalLink } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, AlertCircle, ExternalLink, ChevronDown, ChevronUp, ShieldCheck } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 interface CompanyCardProps {
@@ -8,6 +9,7 @@ interface CompanyCardProps {
 }
 
 export function CompanyCard({ company, isNew = false }: CompanyCardProps) {
+  const [showBreakdown, setShowBreakdown] = useState(false);
   
   const getICPScoreColor = (score: number) => {
     if (score >= 0.8) return 'bg-success/15 text-success border border-success/30';
@@ -44,6 +46,16 @@ export function CompanyCard({ company, isNew = false }: CompanyCardProps) {
     if (amount >= 1000) return `$${(amount / 1000).toFixed(0)}K`;
     return `$${amount}`;
   };
+
+  const dimScores = company.dimension_scores || {};
+  const dimensions = [
+    { key: 'industry', label: 'Industry', match: dimScores.industry === 1.0 },
+    { key: 'headcount', label: 'Headcount', match: dimScores.headcount === 1.0 },
+    { key: 'funding_stage', label: 'Funding', match: dimScores.funding_stage === 1.0 },
+    { key: 'geography', label: 'Geo', match: dimScores.geography === 1.0 },
+    { key: 'revenue', label: 'Revenue', match: dimScores.revenue === 1.0 },
+    { key: 'tech_stack', label: 'Tech', match: dimScores.tech_stack === 1.0 },
+  ];
 
   return (
     <div
@@ -94,6 +106,13 @@ export function CompanyCard({ company, isNew = false }: CompanyCardProps) {
                 {company.funding_stage} {formatFunding(company.funding_amount_usd)}
               </span>
             )}
+            {/* Confidence pill */}
+            {company.confidence_score != null && (
+              <span className="text-[10px] text-text-muted inline-flex items-center gap-1 border border-border/50 px-1.5 py-0.5 rounded">
+                <ShieldCheck className="h-3 w-3 text-primary" />
+                {Math.round(company.confidence_score * 100)}% conf
+              </span>
+            )}
           </div>
 
           {/* Triggers Matched pills */}
@@ -112,16 +131,46 @@ export function CompanyCard({ company, isNew = false }: CompanyCardProps) {
         </div>
 
         {/* Scoring & Validation Badges */}
-        <div className="flex items-center gap-3 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0">
           {/* Validation Dot */}
           {getValidationIcon(company.validation_status)}
 
-          {/* ICP Score */}
-          <div className={cn("px-2.5 py-1 rounded-md text-xs font-bold font-mono tracking-wide", getICPScoreColor(company.icp_match_score ?? 0))}>
-            {((company.icp_match_score ?? 0) * 100).toFixed(0)}% ICP
-          </div>
+          {/* ICP Score & toggle */}
+          <button
+            onClick={() => setShowBreakdown(!showBreakdown)}
+            className={cn(
+              "px-2.5 py-1 rounded-md text-xs font-bold font-mono tracking-wide flex items-center gap-1 cursor-pointer transition-opacity hover:opacity-90",
+              getICPScoreColor(company.icp_match_score ?? 0)
+            )}
+            title="Click to view score breakdown"
+          >
+            <span>{((company.icp_match_score ?? 0) * 100).toFixed(0)}% ICP</span>
+            {showBreakdown ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
         </div>
       </div>
+
+      {/* Expandable Score Breakdown */}
+      {showBreakdown && (
+        <div className="mt-3 pt-2.5 border-t border-border/40 grid grid-cols-3 sm:grid-cols-6 gap-1.5 text-[11px] animate-in slide-in-from-top-1 duration-200">
+          {dimensions.map((dim) => (
+            <div
+              key={dim.key}
+              className={cn(
+                "p-1.5 rounded border text-center transition-colors",
+                dim.match
+                  ? "bg-success/10 border-success/30 text-success"
+                  : "bg-surface/40 border-border/50 text-text-muted"
+              )}
+            >
+              <div className="font-semibold text-[10px]">{dim.label}</div>
+              <div className="font-mono text-[9px] mt-0.5">
+                {dim.match ? "✓ Match" : "— Miss"}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

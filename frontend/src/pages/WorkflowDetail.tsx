@@ -237,7 +237,7 @@ export function WorkflowDetail() {
                   {discoveredCompanies.length === 0 ? (
                     <p className="text-xs text-text-disabled italic">Searching web indexes for target companies...</p>
                   ) : (
-                    discoveredCompanies.map((c) => <CompanyCard key={c.id || c._id} company={c} />)
+                    discoveredCompanies.map((c) => <CompanyCard key={c.id || c._id || c.domain || c.name} company={c} />)
                   )}
                 </div>
               </div>

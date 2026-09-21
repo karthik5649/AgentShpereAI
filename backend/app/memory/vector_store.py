@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from app.core.config import get_settings
 from app.core.exceptions import ExternalServiceNotConfiguredError
 
 
@@ -22,11 +23,24 @@ _dimension: int = 1536
 
 
 def init_vector_store(embeddings: Any | None = None, index_path: str | None = None) -> None:
-    global _faiss_index, _faiss_id_map, _faiss_metadata, _embeddings, _index_path
+    global _faiss_index, _faiss_id_map, _faiss_metadata, _embeddings, _index_path, _memory_vectors
 
     _embeddings = embeddings
+    _memory_vectors = {}
+    _faiss_id_map = {}
+    _faiss_metadata = {}
+    _faiss_index = None
+
     if index_path:
         _index_path = index_path
+
+    if _index_path == ":memory:":
+        try:
+            import faiss
+            _faiss_index = faiss.IndexFlatIP(_dimension)
+            return
+        except ModuleNotFoundError:
+            return
 
     try:
         import faiss
@@ -64,7 +78,7 @@ def _load_or_create_index() -> None:
 
 
 def _save_index() -> None:
-    if _faiss_index is None:
+    if _faiss_index is None or _index_path == ":memory:":
         return
     try:
         import faiss
@@ -79,6 +93,7 @@ def _save_index() -> None:
 
 def _company_embedding_text(company: dict) -> str:
     name = company.get("company_name") or company.get("name") or "Unknown company"
+    domain = company.get("domain") or ""
     industry = company.get("industry") or "unknown industry"
     headquarters = company.get("headquarters") or "unknown headquarters"
     headcount = company.get("headcount") or "unknown number of"
@@ -87,7 +102,7 @@ def _company_embedding_text(company: dict) -> str:
     if isinstance(tech_stack, list):
         tech_stack = ", ".join(str(item) for item in tech_stack)
     return (
-        f"{name} is a {industry} company headquartered in {headquarters}. "
+        f"{name} {domain} is a {industry} company headquartered in {headquarters}. "
         f"They have {headcount} employees and raised {funding_stage} funding. "
         f"Their tech stack includes {tech_stack}."
     )
@@ -109,6 +124,8 @@ def _normalize(vector: list[float]) -> list[float]:
 
 
 async def _embed_text(text: str) -> list[float]:
+    if getattr(get_settings(), "MOCK_MODE", False):
+        return _fallback_embedding(text)
     if _embeddings is None:
         return _fallback_embedding(text)
     try:
@@ -194,14 +211,40 @@ async def search_similar_companies(text: str, top_k: int = 5) -> list[dict]:
     return results
 
 
-async def check_duplicate(domain: str, threshold: float = 0.95) -> bool:
+def _normalize_domain(domain: str | None) -> str:
+    if not domain:
+        return ""
+    d = domain.lower().strip()
+    d = d.removeprefix("https://").removeprefix("http://").removeprefix("www.").rstrip("/")
+    return d
+
+
+async def check_duplicate(domain: str, threshold: float | None = None) -> bool:
     if not domain:
         return False
-    matches = await search_similar_companies(domain, top_k=5)
-    normalized = domain.lower().strip()
+    normalized = _normalize_domain(domain)
+    if not normalized:
+        return False
+
+    # 1. Exact domain match against all stored vectors/metadata
+    for meta in _faiss_metadata.values():
+        stored_domain = _normalize_domain(meta.get("domain"))
+        if stored_domain and stored_domain == normalized:
+            return True
+
+    for item in _memory_vectors.values():
+        stored_domain = _normalize_domain(item.get("metadata", {}).get("domain"))
+        if stored_domain and stored_domain == normalized:
+            return True
+
+    # 2. Semantic similarity search
+    if threshold is None:
+        from app.core.config import get_settings
+        threshold = get_settings().FAISS_SIMILARITY_THRESHOLD
+    matches = await search_similar_companies(normalized, top_k=5)
     for match in matches:
         metadata = match.get("metadata", {})
-        if str(metadata.get("domain", "")).lower().strip() == normalized:
+        if _normalize_domain(metadata.get("domain")) == normalized:
             return True
         if float(match.get("score", 0)) > threshold:
             return True

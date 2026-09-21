@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 
 from app.core.dependencies import get_current_user
 from app.core.exceptions import WorkflowNotFoundError
@@ -121,3 +121,25 @@ async def patch_agent(
     updated = agent.model_copy(update={"status": AgentStatus.ACTIVE if payload.enabled else AgentStatus.DISABLED})
     AGENT_REGISTRY[agent_id] = updated
     return updated
+
+
+@router.post("/{agent_id}/test")
+async def test_agent(
+    agent_id: str,
+    payload: dict = Body(default_factory=dict),
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    from app.registry.agent_registry import FUNCTIONAL_AGENT_REGISTRY, build_minimal_agent_state
+
+    agent_cls = FUNCTIONAL_AGENT_REGISTRY.get(agent_id)
+    if not agent_cls:
+        raise WorkflowNotFoundError(f"Agent {agent_id} was not found in functional registry")
+
+    agent_instance = agent_cls()
+    state = build_minimal_agent_state(agent_id, payload, user_id=user.user_id)
+    output_slice = await agent_instance.run(state)
+    return {
+        "agent_id": agent_id,
+        "status": "success",
+        "output": output_slice,
+    }

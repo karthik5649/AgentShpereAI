@@ -27,7 +27,7 @@ from app.schemas.workflow import (
     WorkflowResponse,
     WorkflowStatus,
 )
-from app.workers.workflow_worker import _run_workflow_async
+from app.services.workflow_executor import run_workflow_async
 
 
 logger = logging.getLogger("agentsphere.workflows")
@@ -44,7 +44,7 @@ async def _run_workflow_background(
 ) -> None:
     """Run the workflow as a fire-and-forget asyncio background task."""
     try:
-        await _run_workflow_async(workflow_id, workflow_config, redis=redis, db=db)
+        await run_workflow_async(workflow_id, workflow_config, redis=redis, db=db)
     except Exception as exc:
         logger.exception(
             "background_workflow_failed",
@@ -59,14 +59,30 @@ async def create_and_start_workflow(
     user: UserContext = Depends(get_current_user),
 ) -> CreateWorkflowResponse:
     session_id = f"sess_{uuid4().hex}"
+    icp_dict = payload.icp.model_dump()
+    triggers = list(payload.triggers)
+    domain_profile_id = payload.domain_profile_id
+
+    if domain_profile_id:
+        from app.memory.document_store import get_domain_profile
+        profile = await get_domain_profile(domain_profile_id)
+        if profile:
+            if not icp_dict.get("weights") and profile.get("default_weights"):
+                icp_dict["weights"] = profile["default_weights"]
+            if icp_dict.get("cutoff") is None and profile.get("default_cutoff") is not None:
+                icp_dict["cutoff"] = profile["default_cutoff"]
+            if not triggers and profile.get("default_triggers"):
+                triggers = profile["default_triggers"]
+
     workflow_doc = {
         "user_id": user.user_id,
         "session_id": session_id,
         "name": payload.name,
         "status": WorkflowStatus.PENDING.value,
-        "icp": payload.icp.model_dump(),
+        "icp": icp_dict,
         "personas": [persona.model_dump() for persona in payload.personas],
-        "triggers": payload.triggers,
+        "triggers": triggers,
+        "domain_profile_id": domain_profile_id,
         "created_at": datetime.now(UTC),
     }
     workflow_id = await create_workflow(workflow_doc)
@@ -74,9 +90,10 @@ async def create_and_start_workflow(
         "workflow_id": workflow_id,
         "session_id": session_id,
         "user_id": user.user_id,
-        "icp": payload.icp.model_dump(),
+        "icp": icp_dict,
         "personas": [persona.model_dump() for persona in payload.personas],
-        "triggers": payload.triggers,
+        "triggers": triggers,
+        "domain_profile_id": domain_profile_id,
     }
     try:
         await update_workflow_status(workflow_id, WorkflowStatus.RUNNING.value, user_id=user.user_id)

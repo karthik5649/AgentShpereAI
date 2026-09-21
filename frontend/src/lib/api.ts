@@ -110,4 +110,9 @@ export const healthApi = {
     rootApi.get('/health').then((res) => res.data),
 };
 
+export const analyticsApi = {
+  get: () =>
+    api.get<any>('/analytics').then((res) => res.data),
+};
+
 export default api;

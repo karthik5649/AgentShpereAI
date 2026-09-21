@@ -1,3 +1,4 @@
+from app.services.factory import get_serper_service
 from app.services.serper_service import SerperService
 
 
@@ -26,7 +27,7 @@ class LinkedInTool:
 
         title_query = " OR ".join(f'"{title}"' for title in title_patterns[:3])
         query = f'site:linkedin.com/in "{company}" ({title_query})'
-        rows = await SerperService().search(query=query, search_type="search")
+        rows = await get_serper_service().search(query=query, search_type="search")
         people: list[dict] = []
         for row in rows:
             link = row.get("link", "")

@@ -192,10 +192,156 @@ async def delete_workflow(workflow_id: str, user_id: str) -> None:
     await _database().agent_logs.delete_many(query)
 
 
+async def get_contact(contact_id: str, user_id: str | None = None) -> dict | None:
+    query: dict[str, Any] = {"_id": contact_id}
+    if user_id is not None:
+        query["user_id"] = user_id
+    doc = await _database().contacts.find_one(query)
+    return _public(doc)
+
+
+async def record_email_activity(activity: dict) -> str:
+    activity_id = activity.get("_id") or f"email_{uuid4().hex}"
+    document = {
+        **activity,
+        "_id": activity_id,
+        "sent_at": activity.get("sent_at") or _now(),
+    }
+    await _database().email_activities.insert_one(document)
+    return activity_id
+
+
+async def get_email_activities(
+    workflow_id: str | None = None,
+    contact_id: str | None = None,
+    user_id: str | None = None,
+) -> list[dict]:
+    query: dict[str, Any] = {}
+    if workflow_id:
+        query["workflow_id"] = workflow_id
+    if contact_id:
+        query["contact_id"] = contact_id
+    if user_id:
+        query["user_id"] = user_id
+    cursor = _database().email_activities.find(query).sort("sent_at", -1)
+    return [_public(doc) async for doc in cursor if doc]
+
+
+async def save_evidence(evidence: dict) -> str:
+    evidence_id = evidence.get("_id") or f"ev_{uuid4().hex}"
+    document = {
+        **evidence,
+        "_id": evidence_id,
+        "retrieved_at": evidence.get("retrieved_at") or _now(),
+    }
+    await _database().evidence.insert_one(document)
+    return evidence_id
+
+
+async def get_company_evidence(company_id: str, user_id: str | None = None) -> list[dict]:
+    query: dict[str, Any] = {"entity_id": company_id}
+    if user_id:
+        query["user_id"] = user_id
+    cursor = _database().evidence.find(query).sort("retrieved_at", 1)
+    return [_public(doc) async for doc in cursor if doc]
+
+
+async def save_domain_profile(profile: dict) -> str:
+    profile_id = profile.get("_id") or profile.get("id") or f"dp_{uuid4().hex}"
+    document = {
+        **profile,
+        "_id": profile_id,
+        "id": profile_id,
+        "created_at": profile.get("created_at") or _now(),
+    }
+    await _database().domain_profiles.update_one(
+        {"_id": profile_id},
+        {"$set": document},
+        upsert=True,
+    )
+    return profile_id
+
+
+async def get_domain_profile(profile_id: str) -> dict | None:
+    doc = await _database().domain_profiles.find_one({"_id": profile_id})
+    return _public(doc)
+
+
+async def list_domain_profiles() -> list[dict]:
+    cursor = _database().domain_profiles.find({})
+    return [_public(doc) async for doc in cursor if doc]
+
+
 async def document_stats(user_id: str) -> dict:
     return {
         "workflows": await _database().workflows.count_documents({"user_id": user_id}),
         "companies": await _database().companies.count_documents({"user_id": user_id}),
         "contacts": await _database().contacts.count_documents({"user_id": user_id}),
         "agent_logs": await _database().agent_logs.count_documents({"user_id": user_id}),
+        "email_activities": await _database().email_activities.count_documents({"user_id": user_id}),
     }
+
+
+async def get_analytics_metrics(user_id: str) -> dict[str, Any]:
+    from datetime import datetime, timedelta, UTC
+
+    db = _database()
+    counts = await document_stats(user_id)
+
+    workflows_cursor = db.workflows.find({"user_id": user_id})
+    all_workflows = [_public(doc) async for doc in workflows_cursor if doc]
+
+    total_cost = sum(float(w.get("total_cost_usd", 0.0) or 0.0) for w in all_workflows)
+    total_tokens = sum(int(w.get("total_tokens", 0) or 0) for w in all_workflows)
+    total_leads = sum(int(w.get("results_count", 0) or 0) for w in all_workflows)
+    if total_leads == 0:
+        total_leads = counts["contacts"]
+
+    cost_per_lead = round(total_cost / total_leads, 4) if total_leads > 0 else 0.0
+
+    agent_logs_cursor = db.agent_logs.find({"user_id": user_id})
+    agent_logs = [_public(doc) async for doc in agent_logs_cursor if doc]
+
+    agent_token_map: dict[str, int] = {}
+    agent_cost_map: dict[str, float] = {}
+    for log in agent_logs:
+        agent = log.get("agent_name") or "other"
+        tokens = log.get("tokens", 0) or 0
+        cost = log.get("cost_usd", 0.0) or 0.0
+        agent_token_map[agent] = agent_token_map.get(agent, 0) + tokens
+        agent_cost_map[agent] = round(agent_cost_map.get(agent, 0.0) + cost, 4)
+
+    now = datetime.now(UTC)
+    daily_spend = []
+    for i in range(6, -1, -1):
+        day_date = (now - timedelta(days=i)).date()
+        day_label = day_date.strftime("%b %d")
+        spend = 0.0
+        for w in all_workflows:
+            created = w.get("created_at")
+            if isinstance(created, str):
+                try:
+                    created = datetime.fromisoformat(created)
+                except Exception:
+                    created = None
+            if created and getattr(created, "date", None) and created.date() == day_date:
+                spend += float(w.get("total_cost_usd", 0.0) or 0.0)
+        daily_spend.append({"day": day_label, "spend": round(spend, 4)})
+
+    return {
+        "total_workflows": counts["workflows"],
+        "total_companies": counts["companies"],
+        "total_contacts": counts["contacts"],
+        "total_emails_sent": counts["email_activities"],
+        "total_agent_logs": counts["agent_logs"],
+        "total_cost_usd": round(total_cost, 4),
+        "total_tokens": total_tokens,
+        "total_leads": total_leads,
+        "cost_per_lead": cost_per_lead,
+        "agent_breakdown": [
+            {"name": k, "cost": v, "tokens": agent_token_map.get(k, 0)}
+            for k, v in agent_cost_map.items()
+        ],
+        "daily_spend": daily_spend,
+    }
+

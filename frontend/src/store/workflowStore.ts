@@ -119,8 +119,14 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
 
   appendCompany: (company) =>
     set((state) => {
-      // Avoid duplicates
-      const exists = state.discoveredCompanies.some((c) => c.id === company.id || c._id === company._id);
+      // Avoid duplicates safely without undefined === undefined matching
+      const exists = state.discoveredCompanies.some(
+        (c) =>
+          (c.id && company.id && c.id === company.id) ||
+          (c._id && company._id && c._id === company._id) ||
+          (c.domain && company.domain && c.domain.toLowerCase().trim() === company.domain.toLowerCase().trim()) ||
+          (c.name && company.name && c.name.toLowerCase().trim() === company.name.toLowerCase().trim())
+      );
       if (exists) return {};
       return {
         discoveredCompanies: [...state.discoveredCompanies, company],
@@ -129,7 +135,14 @@ export const useWorkflowStore = create<WorkflowState>((set) => ({
 
   appendContact: (contact) =>
     set((state) => {
-      const exists = state.enrichedContacts.some((c) => c.id === contact.id || c._id === contact._id);
+      const exists = state.enrichedContacts.some(
+        (c) =>
+          (c.id && contact.id && c.id === contact.id) ||
+          (c._id && contact._id && c._id === contact._id) ||
+          (c.email && contact.email && c.email.toLowerCase().trim() === contact.email.toLowerCase().trim()) ||
+          (c.linkedin_url && contact.linkedin_url && c.linkedin_url === contact.linkedin_url) ||
+          (c.name && contact.name && c.name.toLowerCase().trim() === contact.name.toLowerCase().trim() && c.company === contact.company)
+      );
       if (exists) return {};
       
       const newContacts = [...state.enrichedContacts, contact];

@@ -18,6 +18,7 @@ class AgentState(TypedDict):
     enriched_contacts: Annotated[list[dict], operator.add]
     summary_report: Optional[dict]
     approval_status: Optional[str]
+    icp_status: Optional[str]
 
     agent_logs: Annotated[list[dict], operator.add]
     total_tokens: int

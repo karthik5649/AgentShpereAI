@@ -13,6 +13,8 @@ class ICPConfig(BaseModel):
     geography: list[str]
     revenue_min_usd: int | None = Field(default=None, ge=0)
     tech_stack: list[str] | None = None
+    weights: dict[str, float] | None = None
+    cutoff: float | None = None
 
     @field_validator("headcount_max")
     @classmethod
@@ -35,6 +37,7 @@ class CreateWorkflowRequest(BaseModel):
     icp: ICPConfig
     personas: list[PersonaConfig]
     triggers: list[str]
+    domain_profile_id: str | None = None
 
 
 class WorkflowStatus(str, Enum):

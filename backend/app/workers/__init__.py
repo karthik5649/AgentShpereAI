@@ -1,1 +1,1 @@
-"""Celery worker package."""
+"""Background task execution package."""

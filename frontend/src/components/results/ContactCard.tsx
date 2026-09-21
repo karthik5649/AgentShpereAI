@@ -70,6 +70,11 @@ export function ContactCard({ contact, showApprovalStatus = false }: ContactCard
             {contact.email ? (
               <>
                 <span className="truncate select-text text-text-secondary">{contact.email}</span>
+                {contact.email_source && (
+                  <span className="text-[9px] font-mono text-text-muted bg-surface/60 px-1 py-0.5 rounded border border-border/40">
+                    via {contact.email_source}
+                  </span>
+                )}
                 <button
                   onClick={handleCopyEmail}
                   className="p-1 rounded hover:bg-surface text-text-muted hover:text-white transition-colors"
@@ -89,6 +94,11 @@ export function ContactCard({ contact, showApprovalStatus = false }: ContactCard
             {contact.phone ? (
               <>
                 <span className="select-text text-text-secondary">{contact.phone}</span>
+                {contact.phone_source && (
+                  <span className="text-[9px] font-mono text-text-muted bg-surface/60 px-1 py-0.5 rounded border border-border/40">
+                    via {contact.phone_source}
+                  </span>
+                )}
                 <button
                   onClick={handleCopyPhone}
                   className="p-1 rounded hover:bg-surface text-text-muted hover:text-white transition-colors"

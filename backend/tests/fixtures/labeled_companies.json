@@ -1,0 +1,167 @@
+[
+  {
+    "name": "CloudScale AI",
+    "domain": "cloudscale.ai",
+    "industry": "B2B SaaS",
+    "headcount": 150,
+    "funding_stage": "Series B",
+    "geography": "San Francisco, CA, United States",
+    "revenue": 12000000,
+    "tech_stack": ["AWS", "Kubernetes", "PostgreSQL"],
+    "ground_truth": true
+  },
+  {
+    "name": "DataMesh Corp",
+    "domain": "datameshcorp.io",
+    "industry": "Enterprise Software",
+    "headcount": 320,
+    "funding_stage": "Series C",
+    "geography": "Toronto, Ontario, Canada",
+    "revenue": 25000000,
+    "tech_stack": ["Python", "PostgreSQL"],
+    "ground_truth": true
+  },
+  {
+    "name": "CyberGuard Security",
+    "domain": "cyberguardsec.com",
+    "industry": "Cloud Infrastructure",
+    "headcount": 80,
+    "funding_stage": "Series A",
+    "geography": "London, United Kingdom",
+    "revenue": 8000000,
+    "tech_stack": ["AWS", "Kubernetes"],
+    "ground_truth": true
+  },
+  {
+    "name": "AppFlow Automation",
+    "domain": "appflowauto.com",
+    "industry": "B2B SaaS",
+    "headcount": 210,
+    "funding_stage": "Series B",
+    "geography": "New York, NY, United States",
+    "revenue": 4000000,
+    "tech_stack": ["React", "AWS"],
+    "ground_truth": true
+  },
+  {
+    "name": "LogikVault",
+    "domain": "logikvault.io",
+    "industry": "Enterprise Software",
+    "headcount": 550,
+    "funding_stage": "Growth",
+    "geography": "Vancouver, BC, Canada",
+    "revenue": 45000000,
+    "tech_stack": ["Java", "Oracle"],
+    "ground_truth": true
+  },
+  {
+    "name": "OpsPilot",
+    "domain": "opspilot.dev",
+    "industry": "Cloud Infrastructure",
+    "headcount": 95,
+    "funding_stage": "Series A",
+    "geography": "Austin, TX, United States",
+    "revenue": null,
+    "tech_stack": [],
+    "ground_truth": true
+  },
+  {
+    "name": "OmniSync Hub",
+    "domain": "omnisynchub.com",
+    "industry": "B2B SaaS",
+    "headcount": 75,
+    "funding_stage": "Series B",
+    "geography": "Montreal, Canada",
+    "revenue": 3000000,
+    "tech_stack": ["PHP"],
+    "ground_truth": true
+  },
+  {
+    "name": "DevSphere Labs",
+    "domain": "devspherelabs.tech",
+    "industry": "Enterprise Software",
+    "headcount": 120,
+    "funding_stage": "Seed",
+    "geography": "Boston, MA, United States",
+    "revenue": 7000000,
+    "tech_stack": ["Python", "AWS"],
+    "ground_truth": true
+  },
+  {
+    "name": "QuickRetail Commerce",
+    "domain": "quickretail.de",
+    "industry": "E-Commerce Retail",
+    "headcount": 200,
+    "funding_stage": "Series B",
+    "geography": "Berlin, Germany",
+    "revenue": 15000000,
+    "tech_stack": ["Shopify"],
+    "ground_truth": false
+  },
+  {
+    "name": "SoloDev Studio",
+    "domain": "solodevstudio.io",
+    "industry": "B2B SaaS",
+    "headcount": 2,
+    "funding_stage": "Bootstrapped",
+    "geography": "Seattle, WA, United States",
+    "revenue": 100000,
+    "tech_stack": ["Python", "React"],
+    "ground_truth": false
+  },
+  {
+    "name": "MegaConglomerate Holdings",
+    "domain": "megaconglomerate.com",
+    "industry": "Oil & Gas",
+    "headcount": 50000,
+    "funding_stage": "Public",
+    "geography": "Houston, TX, United States",
+    "revenue": 500000000,
+    "tech_stack": ["SAP"],
+    "ground_truth": false
+  },
+  {
+    "name": "FreshBite Foods",
+    "domain": "freshbitefoods.com",
+    "industry": "Food & Beverage",
+    "headcount": 45,
+    "funding_stage": "Series A",
+    "geography": "Denver, CO, United States",
+    "revenue": 2000000,
+    "tech_stack": [],
+    "ground_truth": false
+  },
+  {
+    "name": "Tokyo Robotics KK",
+    "domain": "tokyorobotics.jp",
+    "industry": "Industrial Robotics",
+    "headcount": 600,
+    "funding_stage": "Series C",
+    "geography": "Tokyo, Japan",
+    "revenue": 30000000,
+    "tech_stack": ["C++"],
+    "ground_truth": false
+  },
+  {
+    "name": "Stealthy Stealth Inc",
+    "domain": "stealthystealth.io",
+    "industry": null,
+    "headcount": null,
+    "funding_stage": "Pre-Seed",
+    "geography": "Palo Alto, CA, United States",
+    "revenue": null,
+    "tech_stack": [],
+    "ground_truth": false
+  },
+  {
+    "name": "Nordic FinTech AB",
+    "domain": "nordicfintech.se",
+    "industry": "Financial Services",
+    "headcount": 180,
+    "funding_stage": "Series B",
+    "geography": "Stockholm, Sweden",
+    "revenue": 9000000,
+    "tech_stack": ["Kubernetes", "AWS"],
+    "ground_truth": false
+  }
+]

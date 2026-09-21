@@ -1,7 +1,9 @@
 def test_workflow_crud_and_approval(client, monkeypatch):
     import app.routers.workflows as workflow_router
+    async def fake_run(*args, **kwargs):
+        pass
 
-    monkeypatch.setattr(workflow_router.run_workflow_task, "delay", lambda *args, **kwargs: None)
+    monkeypatch.setattr(workflow_router, "_run_workflow_background", fake_run)
 
     payload = {
         "name": "SaaS Funding Discovery",

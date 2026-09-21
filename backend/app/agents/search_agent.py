@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 from app.agents.common import emit_agent_completed, emit_agent_error, emit_agent_started, publish_workflow_event
 from app.memory.cache import get_cached, set_cached
+from app.services.factory import get_serper_service
 from app.services.serper_service import SerperService
 
 
@@ -21,7 +22,7 @@ class SearchAgent:
     name = "search_agent"
 
     def __init__(self, serper_service: SerperService | None = None):
-        self.serper = serper_service or SerperService()
+        self.serper = serper_service or get_serper_service()
 
     async def run(self, state: dict) -> dict:
         await emit_agent_started(state, self.name)

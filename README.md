@@ -99,10 +99,10 @@ graph TD
 | **Queue & Graph** | LangGraph / asyncio | Stateful background workflow execution |
 | **Primary Database**| MongoDB | Persistent state storage for runs, companies, and contacts |
 | **Cache & Bus** | Redis | Caching, concurrent locks, and WebSocket Pub/Sub broker |
-| **Vector Index** | FAISS / Pinecone | Cosine similarity semantic search memory for deduplication |
-| **AI Models** | GPT-4o / Gemini 2.5 | Planner and Summary reasoning agents |
-| **Data Scraping** | Serper, Crunchbase | Real-time news alerts and corporate validation |
-| **Enrichment** | Apollo, Hunter | Person locator and verified work email matching |
+| **Vector Index** | FAISS / Pinecone | Cosine similarity semantic search memory and exact domain deduplication |
+| **AI Models** | Ollama (`qwen2.5:7b`) / Gemini / GPT-4o | Local-first zero-cost default LLM; cloud opt-in with deterministic fallback |
+| **Data Sourcing** | Crunchbase + Apollo Org Search | Parallel multi-provider firmographic sourcing with conflict detection |
+| **Enrichment** | Apollo People + Hunter.io | Decision maker search, email deliverability verification & provenance |
 
 ---
 

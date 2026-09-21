@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     ALLOWED_ORIGINS: list[str] | str = Field(default_factory=lambda: ["http://localhost:5173"])
 
+    LLM_PROVIDER: str = "ollama"
+
     OPENAI_API_KEY: str | None = None
     OPENAI_MODEL: str = "gpt-4o"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
@@ -22,21 +24,33 @@ class Settings(BaseSettings):
     GEMINI_EMBEDDING_MODEL: str = "text-embedding-004"
 
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "llama3"
+    OLLAMA_MODEL: str = "qwen2.5:7b"
     OLLAMA_EMBEDDING_MODEL: str = "nomic-embed-text"
 
     MONGODB_URI: str = "mongodb://localhost:27017"
     MONGODB_DB_NAME: str = "agentsphere"
 
     REDIS_URL: str = "redis://localhost:6379/0"
-
-    FAISS_INDEX_PATH: str = "./data/faiss_index"
-
     CLERK_SECRET_KEY: str | None = None
     CLERK_JWKS_URL: str | None = None
 
+    MOCK_MODE: bool = True
+    ICP_QUALIFY_CUTOFF: float = 0.65
+
     SERPER_API_KEY: str | None = None
     HUNTER_API_KEY: str | None = None
+    APOLLO_API_KEY: str | None = None
+    CRUNCHBASE_API_KEY: str | None = None
+
+    FAISS_INDEX_PATH: str = "./data/faiss_index"
+    FAISS_SIMILARITY_THRESHOLD: float = 0.90
+
+    EMAIL_SENDER_PROVIDER: str = "mock"
+    SMTP_HOST: str = "localhost"
+    SMTP_PORT: int = 587
+    SMTP_USER: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_FROM_ADDRESS: str = "outreach@agentsphere.ai"
 
     CELERY_TASK_ALWAYS_EAGER: bool = False
 

@@ -17,6 +17,9 @@ export interface Company {
   linkedin_url?: string;
   crunchbase_url?: string;
   icp_match_score: number;
+  confidence_score?: number;
+  dimension_scores?: Record<string, number>;
+  scoring_error?: string;
   validation_status?: 'validated' | 'partial' | 'unverified';
   triggers_matched: string[];
   tech_stack?: string[];

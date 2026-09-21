@@ -33,6 +33,8 @@ class Company(BaseModel):
     linkedin_url: str | None = None
     crunchbase_url: str | None = None
     icp_match_score: float = Field(default=0, ge=0, le=1)
+    dimension_scores: dict[str, float] = Field(default_factory=dict)
+    scoring_error: str | None = None
     validation_status: str | None = None
     triggers_matched: list[str] = Field(default_factory=list)
     tech_stack: list[str] = Field(default_factory=list)

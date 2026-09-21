@@ -14,6 +14,6 @@ async def test_redis_cache_operations(fake_redis):
 
 @pytest.mark.asyncio
 async def test_vector_store_fallback_duplicate_detection():
-    init_vector_store(None, None)
+    init_vector_store(None, ":memory:")
     await store_company_embedding({"id": "co_1", "name": "Acme", "domain": "acme.com", "workflow_id": "wf_1"})
     assert await check_duplicate("acme.com")

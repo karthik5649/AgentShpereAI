@@ -14,7 +14,9 @@ class Contact(BaseModel):
     department: str | None = None
     email: str | None = None
     email_confidence: float | None = Field(default=None, ge=0, le=1)
+    email_source: str | None = None
     phone: str | None = None
+    phone_source: str | None = None
     linkedin_url: str | None = None
     persona_matched: str | None = None
     approval_status: str = "pending"

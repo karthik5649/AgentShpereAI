@@ -1,42 +1,93 @@
+import asyncio
+import logging
 from urllib.parse import urlparse
 
 from app.agents.common import emit_agent_completed, emit_agent_error, emit_agent_started, publish_workflow_event
 from app.memory.cache import acquire_lock, release_lock
 from app.memory.vector_store import check_duplicate
+from app.services.apollo_service import ApolloService
 from app.services.crunchbase_service import CrunchbaseService
+from app.services.factory import get_apollo_service, get_crunchbase_service
+from app.services.icp_scoring_service import score_company as icp_score_company
+
+logger = logging.getLogger("agentsphere.agents")
 
 
 class CompanyDiscoveryAgent:
     name = "company_discovery_agent"
 
-    def __init__(self, crunchbase_service: CrunchbaseService | None = None):
-        self.crunchbase = crunchbase_service or CrunchbaseService()
+    def __init__(
+        self,
+        crunchbase_service: CrunchbaseService | None = None,
+        apollo_service: ApolloService | None = None,
+    ):
+        self.crunchbase = crunchbase_service or get_crunchbase_service()
+        self.apollo = apollo_service or get_apollo_service()
 
     async def run(self, state: dict) -> dict:
         await emit_agent_started(state, self.name)
         discovered: list[dict] = []
+        seen_domains: set[str] = set()
+        seen_names: set[str] = set()
         icp = state.get("icp", {})
-        # Read threshold from ICP config — default to 0.35 to allow companies through when Crunchbase is unavailable
         score_threshold = float(icp.get("min_icp_score") or 0.35)
+
         try:
             for signal in state.get("raw_signals", []):
-                company_name = signal.get("company", "")
-                guessed_domain = signal.get("domain")  # best-effort domain from SearchAgent
+                company_name = signal.get("company", "").strip()
+                guessed_domain = (signal.get("domain") or "").strip().lower()
+
+                # Fast in-run deduplication check before making network calls
+                if guessed_domain and guessed_domain in seen_domains:
+                    continue
+                if company_name and company_name.lower() in seen_names:
+                    continue
+
                 lock_key = f"lock:company:{company_name.lower().replace(' ', '_')}"
                 if not await acquire_lock(lock_key, timeout_seconds=30):
                     continue
+
                 try:
-                    # Look up by company NAME (not article domain) — Crunchbase autocomplete works better with names
-                    details = await self.crunchbase.get_company(company_name) if company_name else {}
-                    company = self._merge_signal_and_details(signal, details, state, guessed_domain)
-                    score, matched = self.score_company(company, icp)
+                    # Multi-provider lookup: query both Crunchbase and Apollo in parallel
+                    cb_task = self._safe_get_crunchbase(company_name)
+                    apollo_task = self._safe_get_apollo(guessed_domain, company_name)
+                    cb_details, apollo_details = await asyncio.gather(cb_task, apollo_task)
+
+                    company = self._merge_signal_and_details(
+                        signal, cb_details, apollo_details, state, guessed_domain
+                    )
+
+                    resolved_domain = (company.get("domain") or guessed_domain or "").strip().lower()
+                    resolved_name = (company.get("name") or company_name).strip().lower()
+
+                    # Check in-run and historical vector deduplication
+                    if resolved_domain and resolved_domain in seen_domains:
+                        continue
+                    if resolved_name and resolved_name in seen_names:
+                        continue
+                    if resolved_domain and await check_duplicate(resolved_domain):
+                        continue
+
+                    # Score company against ICP
+                    score_res = icp_score_company(company, icp)
+                    score, matched, failed, unknown = score_res[:4]
+                    dimension_scores = getattr(score_res, "dimension_scores", {}) or company.get("dimension_scores", {})
+
                     company["icp_match_score"] = score
+                    company["dimension_scores"] = dimension_scores
                     company["icp_criteria_matched"] = matched
+                    company["icp_criteria_failed"] = failed
+                    company["icp_criteria_unknown"] = unknown
+
                     if score < score_threshold:
+                        logger.debug("company_rejected_below_threshold: %s score=%.4f < %.4f", resolved_name, score, score_threshold)
                         continue
-                    domain = company.get("domain") or guessed_domain
-                    if domain and await check_duplicate(domain):
-                        continue
+
+                    if resolved_domain:
+                        seen_domains.add(resolved_domain)
+                    if resolved_name:
+                        seen_names.add(resolved_name)
+
                     discovered.append(company)
                     await publish_workflow_event(
                         state["workflow_id"],
@@ -47,10 +98,11 @@ class CompanyDiscoveryAgent:
                     )
                 finally:
                     await release_lock(lock_key)
+
             await emit_agent_completed(
                 state,
                 self.name,
-                {"message": f"Company Discovery qualified {len(discovered)} companies"},
+                {"message": f"Company Discovery qualified {len(discovered)} unique companies"},
             )
             return {
                 "discovered_companies": discovered,
@@ -62,158 +114,272 @@ class CompanyDiscoveryAgent:
             await emit_agent_error(state, self.name, exc)
             raise
 
-    def _merge_signal_and_details(self, signal: dict, details: dict, state: dict, guessed_domain: str | None = None) -> dict:
-        # Prefer Crunchbase website_url (the company's real site) over guessed domain
-        crunchbase_website = details.get("website_url") or ""
-        real_domain = self._domain_from_url(crunchbase_website) if crunchbase_website else None
-        domain = real_domain or guessed_domain or signal.get("domain")
-        icp = state.get("icp", {})
-        # Infer industry from signal text if Crunchbase didn't return one
-        inferred_industry = details.get("industry") or self._infer_industry_from_signal(signal, icp)
-        # Use ICP funding stage default if Crunchbase returned nothing
-        inferred_funding = details.get("funding_stage") or self._first(icp.get("funding_stages"))
-        # Use ICP geography default if Crunchbase returned nothing
-        inferred_geo = details.get("headquarters") or self._first(icp.get("geography"))
+    async def _safe_get_crunchbase(self, company_name: str) -> dict:
+        if not company_name or not self.crunchbase:
+            return {}
+        try:
+            return await self.crunchbase.get_company(company_name)
+        except Exception as exc:
+            logger.warning("Crunchbase lookup failed for '%s': %s", company_name, exc)
+            return {}
+
+    async def _safe_get_apollo(self, domain: str, company_name: str) -> dict:
+        if not self.apollo:
+            return {}
+        try:
+            return await self.apollo.enrich_organization(domain=domain, company_name=company_name)
+        except Exception as exc:
+            logger.warning("Apollo org enrichment failed for '%s' (%s): %s", company_name, domain, exc)
+            return {}
+
+    def _merge_signal_and_details(
+        self,
+        signal: dict,
+        cb_details: dict,
+        apollo_details: dict | None = None,
+        state: dict | None = None,
+        guessed_domain: str | None = None,
+    ) -> dict:
+        # Support calling with (signal, details, state) for backward compatibility
+        if state is None:
+            state = apollo_details or {}
+            apollo_details = {}
+        elif apollo_details is None:
+            apollo_details = {}
+
+        evidence_list: list[dict] = []
+        conflicts: list[dict] = []
+
+        # 1. Domain Resolution
+        cb_website = cb_details.get("website_url") or ""
+        cb_domain = self._domain_from_url(cb_website) if cb_website else None
+        ap_domain = apollo_details.get("domain")
+        sig_domain = guessed_domain or signal.get("domain")
+
+        if cb_domain and ap_domain and cb_domain.lower() == ap_domain.lower():
+            domain = cb_domain
+            evidence_list.append({
+                "field": "domain",
+                "value": domain,
+                "source": "crunchbase+apollo",
+                "confidence": 0.98,
+                "evidence_type": "verified_website",
+                "notes": "Both Crunchbase and Apollo agree on domain",
+            })
+        elif cb_domain and ap_domain and cb_domain.lower() != ap_domain.lower():
+            domain = cb_domain
+            conflicts.append({
+                "field": "domain",
+                "sources": [
+                    {"source": "crunchbase", "value": cb_domain},
+                    {"source": "apollo", "value": ap_domain},
+                ],
+            })
+            evidence_list.append({
+                "field": "domain",
+                "value": cb_domain,
+                "source": "crunchbase",
+                "confidence": 0.90,
+                "evidence_type": "database",
+            })
+            evidence_list.append({
+                "field": "domain",
+                "value": ap_domain,
+                "source": "apollo",
+                "confidence": 0.85,
+                "evidence_type": "database",
+            })
+        elif cb_domain:
+            domain = cb_domain
+            evidence_list.append({
+                "field": "domain",
+                "value": cb_domain,
+                "source": "crunchbase",
+                "confidence": 0.90,
+                "evidence_type": "database",
+            })
+        elif ap_domain:
+            domain = ap_domain
+            evidence_list.append({
+                "field": "domain",
+                "value": ap_domain,
+                "source": "apollo",
+                "confidence": 0.85,
+                "evidence_type": "database",
+            })
+        else:
+            domain = sig_domain
+            if domain:
+                evidence_list.append({
+                    "field": "domain",
+                    "value": domain,
+                    "source": "news_signal",
+                    "confidence": 0.70,
+                    "evidence_type": "inferred",
+                })
+
+        # 2. Industry Resolution
+        cb_ind = cb_details.get("industry")
+        ap_ind = apollo_details.get("industry")
+        sig_ind = self._infer_industry_from_signal(signal, state.get("icp", {}))
+
+        if cb_ind and ap_ind and cb_ind.lower() == ap_ind.lower():
+            industry = cb_ind
+            evidence_list.append({
+                "field": "industry",
+                "value": industry,
+                "source": "crunchbase+apollo",
+                "confidence": 0.98,
+                "evidence_type": "verified_industry",
+                "notes": "Both Crunchbase and Apollo agree on industry",
+            })
+        elif cb_ind and ap_ind and cb_ind.lower() != ap_ind.lower():
+            industry = cb_ind
+            conflicts.append({
+                "field": "industry",
+                "sources": [
+                    {"source": "crunchbase", "value": cb_ind},
+                    {"source": "apollo", "value": ap_ind},
+                ],
+            })
+            evidence_list.append({"field": "industry", "value": cb_ind, "source": "crunchbase", "confidence": 0.90})
+            evidence_list.append({"field": "industry", "value": ap_ind, "source": "apollo", "confidence": 0.85})
+        elif cb_ind:
+            industry = cb_ind
+            evidence_list.append({"field": "industry", "value": cb_ind, "source": "crunchbase", "confidence": 0.90})
+        elif ap_ind:
+            industry = ap_ind
+            evidence_list.append({"field": "industry", "value": ap_ind, "source": "apollo", "confidence": 0.85})
+        else:
+            industry = sig_ind
+            if industry:
+                evidence_list.append({"field": "industry", "value": industry, "source": "signal_inference", "confidence": 0.65})
+
+        if cb_ind and sig_ind and cb_ind.lower() != sig_ind.lower():
+            conflicts.append({
+                "field": "industry",
+                "sources": [
+                    {"source": "crunchbase", "value": cb_ind},
+                    {"source": "signal_inference", "value": sig_ind},
+                ],
+            })
+
+        # 3. Headcount Resolution
+        cb_hc = cb_details.get("headcount")
+        ap_hc = apollo_details.get("headcount")
+
+        if cb_hc is not None and ap_hc is not None:
+            pct_diff = abs(cb_hc - ap_hc) / max(cb_hc, ap_hc, 1)
+            if pct_diff <= 0.25:
+                headcount = cb_hc
+                evidence_list.append({
+                    "field": "headcount",
+                    "value": cb_hc,
+                    "source": "crunchbase+apollo",
+                    "confidence": 0.95,
+                    "evidence_type": "corroborated_database",
+                    "notes": f"Sources within 25%: CB={cb_hc}, Apollo={ap_hc}",
+                })
+            else:
+                headcount = cb_hc
+                conflicts.append({
+                    "field": "headcount",
+                    "sources": [
+                        {"source": "crunchbase", "value": cb_hc},
+                        {"source": "apollo", "value": ap_hc},
+                    ],
+                })
+                evidence_list.append({"field": "headcount", "value": cb_hc, "source": "crunchbase", "confidence": 0.85})
+                evidence_list.append({"field": "headcount", "value": ap_hc, "source": "apollo", "confidence": 0.80})
+        elif cb_hc is not None:
+            headcount = cb_hc
+            evidence_list.append({"field": "headcount", "value": cb_hc, "source": "crunchbase", "confidence": 0.85})
+        elif ap_hc is not None:
+            headcount = ap_hc
+            evidence_list.append({"field": "headcount", "value": ap_hc, "source": "apollo", "confidence": 0.80})
+        else:
+            headcount = None
+
+        # 4. Funding Stage & Amount
+        funding_stage = cb_details.get("funding_stage")
+        funding_amount = cb_details.get("funding_amount_usd")
+        if funding_stage:
+            evidence_list.append({
+                "field": "funding_stage",
+                "value": funding_stage,
+                "source": "crunchbase",
+                "confidence": 0.90,
+                "evidence_type": "database",
+            })
+
+        # 5. Headquarters Resolution
+        cb_hq = cb_details.get("headquarters")
+        ap_hq = apollo_details.get("headquarters")
+        if cb_hq and ap_hq and cb_hq.lower() == ap_hq.lower():
+            headquarters = cb_hq
+            evidence_list.append({
+                "field": "headquarters",
+                "value": cb_hq,
+                "source": "crunchbase+apollo",
+                "confidence": 0.95,
+                "notes": "Both Crunchbase and Apollo agree on headquarters",
+            })
+        elif cb_hq:
+            headquarters = cb_hq
+            evidence_list.append({"field": "headquarters", "value": cb_hq, "source": "crunchbase", "confidence": 0.90})
+        elif ap_hq:
+            headquarters = ap_hq
+            evidence_list.append({"field": "headquarters", "value": ap_hq, "source": "apollo", "confidence": 0.85})
+        else:
+            headquarters = None
+
+        # 6. Revenue Estimate
+        revenue_est = cb_details.get("revenue_estimate_usd") or apollo_details.get("revenue_estimate_usd")
+
+        # 7. Tech Stack (Union from both providers)
+        cb_tech = cb_details.get("tech_stack") or []
+        ap_tech = apollo_details.get("tech_stack") or []
+        tech_set = set(cb_tech) | set(ap_tech)
+        tech_stack = sorted(tech_set)
+
+        # 8. Social URLs & Metadata
+        linkedin_url = cb_details.get("linkedin_url") or apollo_details.get("linkedin_url")
+        crunchbase_url = cb_details.get("crunchbase_url")
+
+        display_name = cb_details.get("name") or apollo_details.get("name") or signal.get("company")
+
         return {
             "workflow_id": state["workflow_id"],
             "user_id": state["user_id"],
-            "name": details.get("name") or signal.get("company"),
+            "name": display_name,
             "domain": domain,
-            "industry": inferred_industry,
-            "headcount": details.get("headcount"),
-            "funding_stage": inferred_funding,
-            "funding_amount_usd": details.get("funding_amount_usd"),
-            "revenue_estimate_usd": details.get("revenue_estimate_usd"),
-            "headquarters": inferred_geo,
-            "linkedin_url": details.get("linkedin_url"),
-            "crunchbase_url": details.get("crunchbase_url"),
-            "tech_stack": details.get("tech_stack") or [],
+            "industry": industry,
+            "headcount": headcount,
+            "funding_stage": funding_stage,
+            "funding_amount_usd": funding_amount,
+            "revenue_estimate_usd": revenue_est,
+            "headquarters": headquarters,
+            "linkedin_url": linkedin_url,
+            "crunchbase_url": crunchbase_url,
+            "tech_stack": tech_stack,
             "triggers_matched": [signal.get("trigger_type")] if signal.get("trigger_type") else [],
             "source_signal": signal,
-            "description": details.get("description") or signal.get("signal"),
-            "updated_at": details.get("updated_at"),
+            "description": cb_details.get("description") or signal.get("signal"),
+            "updated_at": cb_details.get("updated_at"),
+            "evidence": evidence_list,
+            "conflicts": conflicts,
         }
 
     def _infer_industry_from_signal(self, signal: dict, icp: dict) -> str | None:
-        """Try to infer industry from the signal text matching ICP industries."""
         text = f"{signal.get('signal', '')} {signal.get('company', '')}".lower()
         for industry in icp.get("industry", []):
             if industry.lower() in text:
                 return industry
-        # Return first ICP industry as best-effort fallback
-        return self._first(icp.get("industry"))
+        return None
 
     def score_company(self, company: dict, icp: dict) -> tuple[float, list[str]]:
-        """Score a company against the ICP.
-
-        When external enrichment data is missing (headcount/funding/revenue are None),
-        we treat those dimensions as *neutral* (0.5) rather than disqualifying (0.0),
-        because the absence of data is not evidence of a bad fit.
-        """
-        industry_match = self._contains_any(company.get("industry"), icp.get("industry", []))
-        headcount_match = self._headcount_match(company.get("headcount"), icp)
-        funding_stage_match = self._funding_stage_match(company.get("funding_stage"), icp.get("funding_stages", []))
-        geography_match = self._geography_match(company.get("headquarters"), icp.get("geography", []))
-        revenue_match = self._revenue_match(company.get("revenue_estimate_usd"), icp.get("revenue_min_usd"))
-        tech_stack_match = self._tech_stack_match(company.get("tech_stack", []), icp.get("tech_stack"))
-
-        score = (
-            industry_match * 0.30
-            + headcount_match * 0.20
-            + funding_stage_match * 0.20
-            + geography_match * 0.15
-            + revenue_match * 0.10
-            + tech_stack_match * 0.05
-        )
-        matched = [
-            name
-            for name, value in [
-                ("industry", industry_match),
-                ("headcount", headcount_match),
-                ("funding_stage", funding_stage_match),
-                ("geography", geography_match),
-                ("revenue", revenue_match),
-                ("tech_stack", tech_stack_match),
-            ]
-            if value > 0
-        ]
-        return round(score, 4), matched
-
-    def _contains_any(self, value, allowed: list[str]) -> float:
-        if not allowed:
-            return 1.0
-        if value is None:
-            # Missing data — neutral score, not a disqualifier
-            return 0.5
-        haystack = str(value).lower()
-        return 1.0 if any(str(item).lower() in haystack or haystack in str(item).lower() for item in allowed) else 0.3
-
-    def _headcount_match(self, value, icp: dict) -> float:
-        if value is None:
-            # No headcount data from Crunchbase — neutral, not disqualifying
-            return 0.5
-        minimum = icp.get("headcount_min", 0)
-        maximum = icp.get("headcount_max", 10**12)
-        return 1.0 if minimum <= int(value) <= maximum else 0.2
-
-    def _funding_stage_match(self, value, allowed: list[str]) -> float:
-        if not allowed:
-            return 1.0
-        if value is None:
-            # No funding stage from Crunchbase — neutral
-            return 0.5
-        haystack = str(value).lower()
-        return 1.0 if any(str(item).lower() in haystack or haystack in str(item).lower() for item in allowed) else 0.3
-
-    def _geography_match(self, value, allowed: list[str]) -> float:
-        """Geo matching with common aliases (US, USA, United States, America)."""
-        if not allowed:
-            return 1.0
-        if value is None:
-            return 0.5
-        # Expand common aliases
-        geo_aliases: dict[str, list[str]] = {
-            "united states": ["usa", "us", "america", "united states of america", "u.s.", "u.s.a."],
-            "uk": ["united kingdom", "england", "great britain", "britain"],
-            "india": ["in", "bharat"],
-        }
-        haystack = str(value).lower()
-        for icp_geo in allowed:
-            icp_lower = icp_geo.lower()
-            # Direct substring match
-            if icp_lower in haystack or haystack in icp_lower:
-                return 1.0
-            # Alias check
-            aliases = geo_aliases.get(icp_lower, [])
-            if any(alias in haystack for alias in aliases):
-                return 1.0
-            # Also check reverse aliases
-            for canonical, alias_list in geo_aliases.items():
-                if icp_lower in alias_list and (canonical in haystack or any(a in haystack for a in alias_list)):
-                    return 1.0
-        return 0.3
-
-    def _revenue_match(self, value, minimum) -> float:
-        if minimum is None or minimum == 0:
-            return 1.0
-        if value is None:
-            # No revenue data — neutral
-            return 0.5
-        # revenue_min_usd from frontend is stored in $M — convert to dollars
-        min_dollars = int(minimum) * 1_000_000 if int(minimum) < 10_000 else int(minimum)
-        return 1.0 if int(value) >= min_dollars else 0.3
-
-    def _tech_stack_match(self, value: list[str], allowed: list[str] | None) -> float:
-        if not allowed:
-            return 1.0
-        if not value:
-            # No tech stack data — neutral
-            return 0.5
-        values = {str(item).lower() for item in value or []}
-        return 1.0 if any(str(item).lower() in values for item in allowed) else 0.3
-
-    def _first(self, values):
-        return values[0] if isinstance(values, list) and values else None
+        score_res = icp_score_company(company, icp)
+        return score_res[0], score_res[1]
 
     def _domain_from_url(self, url: str) -> str | None:
         netloc = urlparse(url).netloc.lower()

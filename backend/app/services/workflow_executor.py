@@ -1,6 +1,5 @@
 import asyncio
 import logging
-
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from redis.asyncio import Redis
 
@@ -9,56 +8,44 @@ from app.core.config import get_settings
 from app.memory.cache import init_cache, store_session_context
 from app.memory.document_store import init_document_store, update_workflow_status
 from app.memory.vector_store import init_vector_store
-from app.workers.celery_app import celery_app
+
+logger = logging.getLogger("agentsphere.workflow_executor")
 
 
-logger = logging.getLogger("agentsphere.worker")
+def create_executor_embeddings(settings):
+    if getattr(settings, "MOCK_MODE", False):
+        return None
 
-
-def create_worker_embeddings(settings):
     if settings.GEMINI_API_KEY:
         try:
             from langchain_google_genai import GoogleGenerativeAIEmbeddings
             return GoogleGenerativeAIEmbeddings(
                 model=settings.GEMINI_EMBEDDING_MODEL,
-                google_api_key=settings.GEMINI_API_KEY
+                google_api_key=settings.GEMINI_API_KEY,
             )
         except ModuleNotFoundError:
-            logger.warning("langchain_google_genai is not installed; worker embeddings will try local Ollama")
+            logger.warning("langchain_google_genai is not installed; executor embeddings will try local Ollama")
 
     try:
         from langchain_ollama import OllamaEmbeddings
         return OllamaEmbeddings(
             model=settings.OLLAMA_EMBEDDING_MODEL,
-            base_url=settings.OLLAMA_BASE_URL
+            base_url=settings.OLLAMA_BASE_URL,
         )
     except ModuleNotFoundError:
-        logger.warning("langchain_ollama is not installed; worker embeddings will use local fallback")
+        logger.warning("langchain_ollama is not installed; executor embeddings will use local fallback")
 
     return None
 
 
-@celery_app.task(bind=True, max_retries=3)
-def run_workflow_task(self, workflow_id: str, workflow_config: dict):
-    try:
-        return asyncio.run(_run_workflow_async(workflow_id, workflow_config))
-    except Exception as exc:
-        retries = getattr(self.request, "retries", 0)
-        if retries >= self.max_retries:
-            logger.exception("workflow_task_failed", extra={"workflow_id": workflow_id})
-            raise
-        countdown = 2**retries
-        raise self.retry(exc=exc, countdown=countdown)
-
-
-async def _run_workflow_async(
+async def run_workflow_async(
     workflow_id: str,
     workflow_config: dict,
     *,
     redis: Redis | None = None,
     db: AsyncIOMotorDatabase | None = None,
 ) -> dict:
-    """Execute the workflow graph.
+    """Execute the workflow graph directly via asyncio in-process.
 
     Parameters
     ----------
@@ -71,7 +58,7 @@ async def _run_workflow_async(
     """
     settings = get_settings()
 
-    # -- Client setup ----------------------------------------------------------
+    # Client setup
     _owns_redis = redis is None
     _owns_mongo = db is None
 
@@ -86,8 +73,9 @@ async def _run_workflow_async(
     init_document_store(db)
     init_cache(redis)
 
-    embeddings = create_worker_embeddings(settings)
-    init_vector_store(embeddings, settings.FAISS_INDEX_PATH)
+    embeddings = create_executor_embeddings(settings)
+    index_path = ":memory:" if getattr(settings, "MOCK_MODE", False) else settings.FAISS_INDEX_PATH
+    init_vector_store(embeddings, index_path)
 
     user_id = workflow_config["user_id"]
     state = {
@@ -97,6 +85,7 @@ async def _run_workflow_async(
         "icp": workflow_config["icp"],
         "personas": workflow_config["personas"],
         "triggers": workflow_config["triggers"],
+        "domain_profile_id": workflow_config.get("domain_profile_id"),
         "execution_plan": None,
         "raw_signals": [],
         "discovered_companies": [],
@@ -113,7 +102,7 @@ async def _run_workflow_async(
 
     try:
         await update_workflow_status(workflow_id, "running", user_id=user_id)
-        await publish_workflow_event(workflow_id, user_id, "progress", "workflow_worker", {"message": "Workflow started"})
+        await publish_workflow_event(workflow_id, user_id, "progress", "workflow_executor", {"message": "Workflow started"})
         try:
             from app.graph.workflow_graph import build_workflow_graph
         except ModuleNotFoundError as exc:
@@ -132,17 +121,27 @@ async def _run_workflow_async(
             workflow_id,
             user_id,
             "log",
-            "workflow_worker",
+            "workflow_executor",
             {"message": "Workflow graph finished and is waiting for approval"},
         )
-        return {"workflow_id": workflow_id, "status": result.get("approval_status") or "awaiting_approval"}
+        return {
+            "workflow_id": workflow_id,
+            "status": result.get("approval_status") or "awaiting_approval",
+            "discovered_companies": result.get("discovered_companies", []),
+            "validated_companies": result.get("validated_companies", []),
+            "enriched_contacts": result.get("enriched_contacts", []),
+            "summary_report": result.get("summary_report"),
+        }
     except Exception as exc:
         await update_workflow_status(workflow_id, "failed", user_id=user_id, error=str(exc))
-        await publish_workflow_event(workflow_id, user_id, "error", "workflow_worker", {"message": str(exc)})
+        await publish_workflow_event(workflow_id, user_id, "error", "workflow_executor", {"message": str(exc)})
         raise
     finally:
-        # Only close clients that *we* created; leave shared ones alone.
         if _owns_redis and redis is not None:
             await redis.aclose()
         if _owns_mongo and mongo_client is not None:
             mongo_client.close()
+
+
+# Alias for compatibility
+_run_workflow_async = run_workflow_async
