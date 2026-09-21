@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     SERPER_API_KEY: str | None = None
     HUNTER_API_KEY: str | None = None
     APOLLO_API_KEY: str | None = None
-    CRUNCHBASE_API_KEY: str | None = None
+    CORESIGNAL_API_KEY: str | None = None
 
     FAISS_INDEX_PATH: str = "./data/faiss_index"
     FAISS_SIMILARITY_THRESHOLD: float = 0.90

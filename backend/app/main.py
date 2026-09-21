@@ -187,7 +187,7 @@ async def health() -> dict:
         "SERPER_API_KEY": bool(settings.SERPER_API_KEY),
         "HUNTER_API_KEY": bool(settings.HUNTER_API_KEY),
         "APOLLO_API_KEY": bool(settings.APOLLO_API_KEY),
-        "CRUNCHBASE_API_KEY": bool(settings.CRUNCHBASE_API_KEY),
+        "CORESIGNAL_API_KEY": bool(settings.CORESIGNAL_API_KEY),
         "FAISS_INDEX_PATH": bool(settings.FAISS_INDEX_PATH),
     }
 

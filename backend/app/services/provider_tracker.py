@@ -10,9 +10,9 @@ class ProviderTracker:
         self._lock = threading.Lock()
         self._providers: dict[str, dict[str, Any]] = {
             "serper": {"available": True, "requests": 0, "errors": 0, "last_error": None, "last_used": None},
-            "crunchbase": {"available": True, "requests": 0, "errors": 0, "last_error": None, "last_used": None},
             "apollo": {"available": True, "requests": 0, "errors": 0, "last_error": None, "last_used": None},
             "hunter": {"available": True, "requests": 0, "errors": 0, "last_error": None, "last_used": None},
+            "coresignal": {"available": True, "requests": 0, "errors": 0, "last_error": None, "last_used": None},
         }
 
     def record_request(self, provider: str) -> None:

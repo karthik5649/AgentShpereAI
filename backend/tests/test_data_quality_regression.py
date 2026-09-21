@@ -6,7 +6,6 @@ from app.agents.planner_agent import PlannerAgent
 from app.agents.common import get_llm
 from app.services.icp_scoring_service import score_company
 from app.services.mocks.mock_serper_service import MockSerperService
-from app.services.mocks.mock_crunchbase_service import MockCrunchbaseService
 from app.core.config import Settings
 
 

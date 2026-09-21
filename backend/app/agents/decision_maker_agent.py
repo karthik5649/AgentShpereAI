@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import logging
 
 from app.agents.common import emit_agent_completed, emit_agent_error, emit_agent_started, publish_workflow_event
 from app.services.apollo_service import ApolloService
-from app.services.factory import get_apollo_service
+from app.services.coresignal_service import CoresignalService, normalize_linkedin_url
+from app.services.factory import get_apollo_service, get_coresignal_service
 from app.tools.linkedin_tool import LinkedInTool, _NEWS_DOMAINS
 
 logger = logging.getLogger("agentsphere.agents")
@@ -22,9 +25,11 @@ class DecisionMakerAgent:
     def __init__(
         self,
         apollo_service: ApolloService | None = None,
+        coresignal_service: CoresignalService | None = None,
         linkedin_tool: LinkedInTool | None = None,
     ):
         self.apollo = apollo_service or get_apollo_service()
+        self.coresignal = coresignal_service or get_coresignal_service()
         self.linkedin = linkedin_tool or LinkedInTool()
 
     async def run(self, state: dict) -> dict:
@@ -44,18 +49,27 @@ class DecisionMakerAgent:
 
                 for persona in state.get("personas", []):
                     titles = persona.get("titles", [])
-                    people = []
-                    search_path = "apollo_people_search"
+                    people: list[dict] = []
+                    search_path = "coresignal_agentic_search"
 
-                    # 1. Try Apollo People Search endpoint first
+                    # 1. Try Coresignal Agentic Search first
                     try:
-                        if self.apollo:
-                            people = await self.apollo.search_people(c_name, domain, titles)
+                        if self.coresignal:
+                            people = await self.coresignal.search_employees(c_name, titles=titles)
                     except Exception as exc:
-                        logger.warning("Apollo search_people error for '%s': %s", c_name, exc)
+                        logger.warning("Coresignal search_employees error for '%s': %s", c_name, exc)
                         people = []
 
-                    # 2. Fall back to Serper LinkedIn search if Apollo returns nothing
+                    # 2. Try Apollo People Search if Coresignal returns nothing
+                    if not people and self.apollo:
+                        search_path = "apollo_people_search"
+                        try:
+                            people = await self.apollo.search_people(c_name, domain, titles)
+                        except Exception as exc:
+                            logger.warning("Apollo search_people error for '%s': %s", c_name, exc)
+                            people = []
+
+                    # 3. Fall back to Serper LinkedIn search if Apollo/Coresignal return nothing
                     if not people:
                         search_path = "serper_linkedin_fallback"
                         try:
@@ -88,7 +102,7 @@ class DecisionMakerAgent:
                                 "title": title,
                                 "seniority": seniority,
                                 "department": self._department(title),
-                                "linkedin_url": person.get("linkedin_url"),
+                                "linkedin_url": normalize_linkedin_url(person.get("linkedin_url")),
                                 "email": person.get("email"),
                                 "phone": person.get("phone"),
                                 "discovery_source": search_path,

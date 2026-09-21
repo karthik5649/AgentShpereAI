@@ -6,8 +6,7 @@ from app.agents.common import emit_agent_completed, emit_agent_error, emit_agent
 from app.memory.cache import acquire_lock, release_lock
 from app.memory.vector_store import check_duplicate
 from app.services.apollo_service import ApolloService
-from app.services.crunchbase_service import CrunchbaseService
-from app.services.factory import get_apollo_service, get_crunchbase_service
+from app.services.factory import get_apollo_service
 from app.services.icp_scoring_service import score_company as icp_score_company
 
 logger = logging.getLogger("agentsphere.agents")
@@ -18,10 +17,9 @@ class CompanyDiscoveryAgent:
 
     def __init__(
         self,
-        crunchbase_service: CrunchbaseService | None = None,
         apollo_service: ApolloService | None = None,
+        crunchbase_service: object | None = None,
     ):
-        self.crunchbase = crunchbase_service or get_crunchbase_service()
         self.apollo = apollo_service or get_apollo_service()
 
     async def run(self, state: dict) -> dict:
@@ -48,13 +46,11 @@ class CompanyDiscoveryAgent:
                     continue
 
                 try:
-                    # Multi-provider lookup: query both Crunchbase and Apollo in parallel
-                    cb_task = self._safe_get_crunchbase(company_name)
-                    apollo_task = self._safe_get_apollo(guessed_domain, company_name)
-                    cb_details, apollo_details = await asyncio.gather(cb_task, apollo_task)
+                    # Organization enrichment via Apollo
+                    apollo_details = await self._safe_get_apollo(guessed_domain, company_name)
 
                     company = self._merge_signal_and_details(
-                        signal, cb_details, apollo_details, state, guessed_domain
+                        signal, {}, apollo_details, state, guessed_domain
                     )
 
                     resolved_domain = (company.get("domain") or guessed_domain or "").strip().lower()
@@ -115,13 +111,7 @@ class CompanyDiscoveryAgent:
             raise
 
     async def _safe_get_crunchbase(self, company_name: str) -> dict:
-        if not company_name or not self.crunchbase:
-            return {}
-        try:
-            return await self.crunchbase.get_company(company_name)
-        except Exception as exc:
-            logger.warning("Crunchbase lookup failed for '%s': %s", company_name, exc)
-            return {}
+        return {}
 
     async def _safe_get_apollo(self, domain: str, company_name: str) -> dict:
         if not self.apollo:

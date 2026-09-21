@@ -133,7 +133,11 @@ export function ContactCard({ contact, showApprovalStatus = false }: ContactCard
         {/* LinkedIn button link */}
         {contact.linkedin_url && (
           <a
-            href={contact.linkedin_url}
+            href={
+              contact.linkedin_url.startsWith('http://') || contact.linkedin_url.startsWith('https://')
+                ? contact.linkedin_url
+                : `https://${contact.linkedin_url}`
+            }
             target="_blank"
             rel="noopener noreferrer"
             className="p-2 rounded-md hover:bg-primary/10 border border-border/40 hover:border-primary/40 text-text-secondary hover:text-primary transition-all duration-150 interactive-btn"

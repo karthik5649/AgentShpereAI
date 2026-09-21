@@ -66,7 +66,7 @@ async def get_system_status() -> dict[str, Any]:
             "SERPER_API_KEY": bool(settings.SERPER_API_KEY),
             "HUNTER_API_KEY": bool(settings.HUNTER_API_KEY),
             "APOLLO_API_KEY": bool(settings.APOLLO_API_KEY),
-            "CRUNCHBASE_API_KEY": bool(settings.CRUNCHBASE_API_KEY),
+            "CORESIGNAL_API_KEY": bool(settings.CORESIGNAL_API_KEY),
             "GEMINI_API_KEY": bool(settings.GEMINI_API_KEY),
             "OPENAI_API_KEY": bool(settings.OPENAI_API_KEY),
         },
